@@ -1,4 +1,6 @@
 
+"""MatiMitra: Streamlit farming assistant with ML crop recommendations."""
+
 import hashlib
 import os
 from datetime import datetime
@@ -15,14 +17,11 @@ from farm_assistant import (
     speak_marathi,
     transcribe_marathi_audio,
 )
+from ml_engine import predict_crop
 from sensor_simulator import initial_readings, next_readings
 from soil_engine import analyze_soil, generate_soil_alerts
 
 load_dotenv()
-
-# ---------------------------------------------------------
-# PAGE CONFIGURATION
-# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="MatiMitra · Farm companion",
@@ -102,7 +101,7 @@ st.markdown(
         border: 1px solid var(--line);
         border-radius: 18px;
         padding: 1rem 1.15rem;
-        box-shadow: 0 8px 22px rgba(0, 0, 0, .16);
+        box-shadow: 0 8px 22px rgba(0,0,0,.16);
     }
 
     [data-testid="stMetricLabel"] {
@@ -122,19 +121,8 @@ st.markdown(
         padding: 2rem 2.2rem;
         color: white;
         background: radial-gradient(circle at 88% 5%, rgba(217,242,126,.32), transparent 24%), linear-gradient(125deg, #102f3c 0%, #0f655d 58%, #20a078 100%);
-        box-shadow: 0 18px 42px rgba(14, 74, 73, .2);
+        box-shadow: 0 18px 42px rgba(14,74,73,.2);
         margin-bottom: 1.25rem;
-    }
-
-    .hero:after {
-        content: '✳';
-        position: absolute;
-        right: 4%;
-        top: -40%;
-        font-size: 19rem;
-        line-height: 1;
-        color: rgba(242,249,229,.08);
-        transform: rotate(-16deg);
     }
 
     .hero-kicker {
@@ -252,7 +240,7 @@ st.markdown(
 # ---------------------------------------------------------
 
 def prepare_reading(reading, source="SIMULATED"):
-    """Attach source and timestamp metadata without changing measurements."""
+    """Attach source and timestamp metadata."""
     prepared = dict(reading)
     prepared["source"] = source
     prepared.setdefault("timestamp", datetime.now().isoformat())
@@ -293,6 +281,12 @@ if "last_audio_hash" not in st.session_state:
 if "last_tts_audio" not in st.session_state:
     st.session_state.last_tts_audio = None
 
+if "last_voice_error" not in st.session_state:
+    st.session_state.last_voice_error = None
+
+if "last_answer_mode" not in st.session_state:
+    st.session_state.last_answer_mode = None
+
 if "voice_enabled" not in st.session_state:
     st.session_state.voice_enabled = True
 
@@ -316,7 +310,7 @@ if not st.session_state.history:
 # ---------------------------------------------------------
 
 def record_reading():
-    """Generate a simulated reading and add it to the chart history."""
+    """Generate a simulated reading and add it to chart history."""
     new_reading = next_readings(st.session_state.readings)
     st.session_state.readings = prepare_reading(
         new_reading, source="SIMULATED"
@@ -330,7 +324,7 @@ def record_reading():
 
 
 def save_manual_reading(values):
-    """Save farmer-entered values for the current Streamlit session."""
+    """Save farmer-entered values for the current session."""
     reading = prepare_reading(values, source="MANUAL")
     st.session_state.readings = reading
 
@@ -341,8 +335,37 @@ def save_manual_reading(values):
     st.session_state.history = st.session_state.history[-100:]
 
 
+def get_crop_prediction(reading):
+    """Return a crop prediction, or None if inputs are incomplete/invalid."""
+    keys = [
+        "N", "P", "K", "temperature", "humidity", "pH", "rainfall"
+    ]
+
+    try:
+        if any(reading.get(key) is None for key in keys):
+            return None
+
+        values = [float(reading[key]) for key in keys]
+
+        if not all(pd.notna(value) for value in values):
+            return None
+
+        return predict_crop(
+            nitrogen=values[0],
+            phosphorus=values[1],
+            potassium=values[2],
+            temperature=values[3],
+            humidity=values[4],
+            ph=values[5],
+            rainfall=values[6],
+        )
+    except (ValueError, TypeError, FileNotFoundError, KeyError) as exc:
+        st.warning(f"Crop prediction unavailable: {exc}")
+        return None
+
+
 # ---------------------------------------------------------
-# SIDEBAR: FARM PROFILE, AI SETTINGS AND MANUAL READINGS
+# SIDEBAR: PROFILE, AI SETTINGS AND READINGS
 # ---------------------------------------------------------
 
 with st.sidebar:
@@ -432,10 +455,7 @@ with st.sidebar:
         key="ai_provider",
     )
 
-    st.toggle(
-        "Speak MatiMitra replies",
-        key="voice_enabled",
-    )
+    st.toggle("Speak MatiMitra replies", key="voice_enabled")
 
     st.divider()
     st.markdown("### Soil readings")
@@ -455,46 +475,31 @@ with st.sidebar:
         st.caption("Use values from your measurement source or soil report.")
 
         manual_n = st.number_input(
-            "Nitrogen (N)",
-            min_value=0.0,
-            max_value=1000.0,
+            "Nitrogen (N)", min_value=0.0, max_value=1000.0,
             value=float(current.get("N", 50.0)),
         )
         manual_p = st.number_input(
-            "Phosphorus (P)",
-            min_value=0.0,
-            max_value=1000.0,
+            "Phosphorus (P)", min_value=0.0, max_value=1000.0,
             value=float(current.get("P", 40.0)),
         )
         manual_k = st.number_input(
-            "Potassium (K)",
-            min_value=0.0,
-            max_value=1000.0,
+            "Potassium (K)", min_value=0.0, max_value=1000.0,
             value=float(current.get("K", 50.0)),
         )
         manual_ph = st.number_input(
-            "Soil pH",
-            min_value=0.0,
-            max_value=14.0,
-            value=float(current.get("pH", 6.5)),
-            step=0.1,
+            "Soil pH", min_value=0.0, max_value=14.0,
+            value=float(current.get("pH", 6.5)), step=0.1,
         )
         manual_temp = st.number_input(
-            "Temperature (°C)",
-            min_value=-10.0,
-            max_value=60.0,
+            "Temperature (°C)", min_value=-10.0, max_value=60.0,
             value=float(current.get("temperature", 30.0)),
         )
         manual_humidity = st.number_input(
-            "Humidity (%)",
-            min_value=0.0,
-            max_value=100.0,
+            "Humidity (%)", min_value=0.0, max_value=100.0,
             value=float(current.get("humidity", 60.0)),
         )
         manual_rainfall = st.number_input(
-            "Rainfall (mm)",
-            min_value=0.0,
-            max_value=1000.0,
+            "Rainfall (mm)", min_value=0.0, max_value=1000.0,
             value=float(current.get("rainfall", 0.0)),
         )
 
@@ -523,6 +528,7 @@ readings = st.session_state.readings
 profile = st.session_state.profile
 source = readings.get("source", "SIMULATED")
 analysis = analyze_soil(readings)
+crop_prediction = get_crop_prediction(readings)
 
 
 # ---------------------------------------------------------
@@ -547,12 +553,8 @@ st.markdown(
             पुढचं पाऊल विचारपूर्वक घ्या.
         </p>
         <div class="hero-badges">
-            <span class="hero-badge">
-                📍 {escape(str(profile['location']))}
-            </span>
-            <span class="hero-badge">
-                🌱 {escape(str(profile['crop'] or 'Crop not set'))}
-            </span>
+            <span class="hero-badge">📍 {escape(str(profile['location']))}</span>
+            <span class="hero-badge">🌱 {escape(str(profile['crop'] or 'Crop not set'))}</span>
             <span class="hero-badge">
                 Reading source: {escape(str(source))} · {escape(display_time)}
             </span>
@@ -610,8 +612,49 @@ for column, title, key in zip(
             column.metric(title, "N/A")
         else:
             column.metric(title, value, help=f"Interpretation: {status}")
-
         column.caption(f"{status} · {str(source).lower()}")
+
+
+# ---------------------------------------------------------
+# ML CROP RECOMMENDATION
+# ---------------------------------------------------------
+
+st.divider()
+st.markdown(
+    '<div class="section-kicker">Machine learning</div>',
+    unsafe_allow_html=True,
+)
+st.subheader("Crop recommendation")
+
+if crop_prediction:
+    st.metric(
+        "Recommended crop",
+        crop_prediction["predicted_crop"].replace("_", " ").title(),
+    )
+
+    st.caption(
+        "Model probability is not a guarantee of crop success. "
+        "Predictions depend on the current readings and the training dataset."
+    )
+
+    st.write("Other model predictions")
+    for item in crop_prediction["alternatives"]:
+        st.write(
+            f"- {item['crop'].replace('_', ' ').title()}: "
+            f"{item['model_probability']:.1%} model probability"
+        )
+
+    with st.expander("Model details"):
+        st.write(
+            "Held-out test accuracy: "
+            f"{crop_prediction['model_test_accuracy']:.2%}"
+        )
+        st.caption(crop_prediction["disclaimer"])
+else:
+    st.info(
+        "A crop prediction is not available. Check that all seven "
+        "measurements are present and the trained model exists."
+    )
 
 
 # ---------------------------------------------------------
@@ -653,7 +696,6 @@ with chart_col:
     st.subheader("Soil signal")
 
     df = pd.DataFrame(st.session_state.history)
-
     required_chart_columns = {"time", "N", "P", "K"}
 
     if not df.empty and required_chart_columns.issubset(df.columns):
@@ -719,7 +761,8 @@ with insight_col:
     if st.button("✨ Explain these readings", width="stretch"):
         st.session_state.pending_question = (
             "माझ्या सध्याच्या मातीच्या रीडिंगचा अर्थ सोप्या मराठीत समजावून "
-            "सांगा. रीडिंगचा स्रोत आणि मर्यादा स्पष्ट करा."
+            "सांगा. उपलब्ध ML पीक शिफारस आणि तिच्या मर्यादाही समजावून सांगा. "
+            "रीडिंगचा स्रोत आणि मर्यादा स्पष्ट करा."
         )
 
 
@@ -728,9 +771,8 @@ with insight_col:
 # ---------------------------------------------------------
 
 def process_question(question):
-    """Send a question to the selected AI provider and save the response."""
+    """Ask the selected AI provider and save the response."""
     question = question.strip()
-
     if not question:
         return
 
@@ -739,15 +781,20 @@ def process_question(question):
         "content": question,
     })
 
+    current_readings = st.session_state.readings
+    current_analysis = analyze_soil(current_readings)
+    current_prediction = get_crop_prediction(current_readings)
+
     try:
         with st.spinner("MatiMitra विचार करत आहे..."):
             answer, mode = answer_question(
                 question=question,
-                readings=st.session_state.readings,
+                readings=current_readings,
                 profile=st.session_state.profile,
-                analysis=analyze_soil(st.session_state.readings),
+                analysis=current_analysis,
                 history=st.session_state.messages[:-1],
                 provider=st.session_state.get("ai_provider", "Gemini"),
+                crop_prediction=current_prediction,
             )
     except Exception as exc:
         answer = (
@@ -788,25 +835,22 @@ st.caption(
     "मराठीत किंवा English मध्ये विचारा — माती, पीक किंवा रीडिंगबद्दल."
 )
 
-for message in st.session_state.messages[-12:]:
+for index, message in enumerate(st.session_state.messages[-12:]):
     with st.chat_message(
         message["role"],
         avatar="🌿" if message["role"] == "assistant" else "🧑‍🌾",
     ):
         st.markdown(message["content"])
 
-        if message["role"] == "assistant":
-            # Show provider status only for the most recent assistant response.
-            if message is st.session_state.messages[-1]:
-                mode = st.session_state.get("last_answer_mode")
-                if mode:
-                    st.caption(f"MatiMitra · {mode}")
+        is_latest = index == len(st.session_state.messages[-12:]) - 1
+        if message["role"] == "assistant" and is_latest:
+            mode = st.session_state.get("last_answer_mode")
+            if mode:
+                st.caption(f"MatiMitra · {mode}")
 
-                voice_error = st.session_state.get("last_voice_error")
-                if voice_error:
-                    st.caption(
-                        f"Voice generation unavailable: {voice_error}"
-                    )
+            voice_error = st.session_state.get("last_voice_error")
+            if voice_error:
+                st.caption(f"Voice generation unavailable: {voice_error}")
 
 question = st.chat_input(
     "उदा. माझ्या जमिनीतील नायट्रोजन कमी असल्यास काय विचारात घ्यावे?"

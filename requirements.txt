@@ -7,3 +7,5 @@ streamlit-autorefresh>=1.0.1
 google-genai
 groq
 edge-tts
+scikit-learn
+joblib

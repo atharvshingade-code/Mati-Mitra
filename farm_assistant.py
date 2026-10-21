@@ -41,10 +41,7 @@ def _is_quota_or_rate_limit_error(exc):
     """Identify common quota and rate-limit errors."""
     status = getattr(exc, "status_code", None)
     code = getattr(exc, "code", None)
-
-    details = (
-        f"{type(exc).__name__} {status} {code} {exc}"
-    ).lower()
+    details = f"{type(exc).__name__} {status} {code} {exc}".lower()
 
     return (
         status == 429
@@ -105,7 +102,6 @@ def _call_groq(prompt):
     from groq import Groq
 
     client = Groq(api_key=api_key)
-
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -139,9 +135,9 @@ def answer_question(
     analysis,
     history=None,
     provider=None,
+    crop_prediction=None,
 ):
-    """Answer a farmer using the preferred provider and quota fallback."""
-
+    """Answer a farmer, optionally using the ML crop prediction."""
     selected = (
         provider or get_setting("DEFAULT_AI_PROVIDER", "Gemini")
     ).strip().lower()
@@ -153,6 +149,11 @@ def answer_question(
         )
 
     recent_history = (history or [])[-4:]
+
+    if crop_prediction is None:
+        crop_context = "No ML crop prediction is available."
+    else:
+        crop_context = crop_prediction
 
     prompt = f"""
 You are MatiMitra, a farming assistant that communicates in Marathi.
@@ -171,6 +172,13 @@ SAFETY RULES:
   advice is needed.
 - Treat unusual readings as possible issues to investigate,
   not confirmed diagnoses.
+- The crop recommendation is a machine-learning prediction, not
+  a guarantee that the crop will grow successfully.
+- Model probabilities are not guaranteed real-world success rates.
+- Do not claim that the ML model itself has verified local weather,
+  soil laboratory results, market prices, or current farming conditions.
+- Explain the prediction using the supplied data. Do not invent
+  measurements or additional model results.
 
 FARM PROFILE:
 {profile}
@@ -180,6 +188,9 @@ CURRENT SOIL READINGS:
 
 SOIL INTERPRETATION AND ALERTS:
 {analysis}
+
+CROP RECOMMENDATION MODEL OUTPUT:
+{crop_context}
 
 RECENT CONVERSATION:
 {recent_history}
@@ -193,61 +204,50 @@ FARMER'S QUESTION:
         "groq": _call_groq,
     }
 
-    # Try the preferred provider first.
-    order = [selected]
-
-    # Only retry with the other provider for quota/rate-limit errors.
     fallback = "groq" if selected == "gemini" else "gemini"
 
-    for provider_name in order:
-        try:
-            return callers[provider_name](prompt)
-        except Exception as exc:
-            print(
-                f"{provider_name.title()} request failed: "
-                f"{type(exc).__name__}; "
-                f"status={getattr(exc, 'status_code', None)}"
+    try:
+        return callers[selected](prompt)
+    except Exception as exc:
+        print(
+            f"{selected.title()} request failed: "
+            f"{type(exc).__name__}; "
+            f"status={getattr(exc, 'status_code', None)}"
+        )
+
+        if not _is_quota_or_rate_limit_error(exc):
+            return (
+                "AI सेवा सध्या उपलब्ध नाही. मॉडेलचे नाव, API key, "
+                "इंटरनेट कनेक्शन आणि API quota तपासा.",
+                f"AI error: {type(exc).__name__}",
             )
 
-            if not _is_quota_or_rate_limit_error(exc):
-                return (
-                    "AI सेवा सध्या उपलब्ध नाही. मॉडेलचे नाव, API key, "
-                    "इंटरनेट कनेक्शन आणि API quota तपासा.",
-                    f"AI error: {type(exc).__name__}",
-                )
+    if fallback not in available_ai_providers():
+        return (
+            "निवडलेल्या AI मॉडेलची मर्यादा संपली आहे आणि दुसरा "
+            "provider कॉन्फिगर केलेला नाही. कृपया दुसरी API key "
+            "किंवा उपलब्ध मॉडेल वापरा.",
+            "Rate limit; no fallback provider",
+        )
 
-            if fallback not in available_ai_providers():
-                return (
-                    "निवडलेल्या AI मॉडेलची मर्यादा संपली आहे आणि "
-                    "दुसरा provider कॉन्फिगर केलेला नाही. कृपया "
-                    "दुसरी API key किंवा उपलब्ध मॉडेल वापरा.",
-                    "Rate limit; no fallback provider",
-                )
-
-            try:
-                answer, mode = callers[fallback](prompt)
-                return answer, f"{mode} (automatic fallback)"
-            except Exception as fallback_exc:
-                print(
-                    f"{fallback.title()} fallback failed: "
-                    f"{type(fallback_exc).__name__}; "
-                    f"status={getattr(fallback_exc, 'status_code', None)}"
-                )
-                return (
-                    "दोन्ही AI सेवांकडून उत्तर मिळाले नाही. API quota, "
-                    "मॉडेलचे नाव आणि सेवा उपलब्धता तपासा.",
-                    f"Fallback error: {type(fallback_exc).__name__}",
-                )
-
-    return (
-        "AI सेवा सध्या उपलब्ध नाही. कृपया पुन्हा प्रयत्न करा.",
-        "AI error",
-    )
+    try:
+        answer, mode = callers[fallback](prompt)
+        return answer, f"{mode} (automatic fallback)"
+    except Exception as exc:
+        print(
+            f"{fallback.title()} fallback failed: "
+            f"{type(exc).__name__}; "
+            f"status={getattr(exc, 'status_code', None)}"
+        )
+        return (
+            "दोन्ही AI सेवांकडून उत्तर मिळाले नाही. API quota, "
+            "मॉडेलचे नाव आणि सेवा उपलब्धता तपासा.",
+            f"Fallback error: {type(exc).__name__}",
+        )
 
 
 def transcribe_marathi_audio(audio_bytes, filename="question.wav"):
     """Transcribe audio using Groq Whisper."""
-
     api_key = get_setting("GROQ_API_KEY")
 
     if not api_key:
@@ -267,7 +267,6 @@ def transcribe_marathi_audio(audio_bytes, filename="question.wav"):
     )
 
     transcript = str(result).strip()
-
     if not transcript:
         raise ValueError(
             "आवाजातून मजकूर समजला नाही. कृपया स्पष्टपणे पुन्हा बोला."
@@ -278,7 +277,6 @@ def transcribe_marathi_audio(audio_bytes, filename="question.wav"):
 
 def speak_marathi(text, voice=None):
     """Generate Marathi speech and return MP3 bytes."""
-
     import edge_tts
 
     selected_voice = voice or get_setting(
