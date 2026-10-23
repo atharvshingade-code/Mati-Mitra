@@ -1,15 +1,16 @@
 
-"""Synthetic sensor readings for the Jarvis for Farmers demo."""
+"""Synthetic sensor readings for the MatiMitra demo."""
 
 from datetime import datetime
 import random
 
 
 def initial_readings():
+    """Create the first simulated reading."""
     return {
-        "N": round(random.uniform(25, 100), 1),
-        "P": round(random.uniform(15, 80), 1),
-        "K": round(random.uniform(20, 100), 1),
+        "N": round(random.uniform(45, 100), 1),
+        "P": round(random.uniform(20, 80), 1),
+        "K": round(random.uniform(25, 100), 1),
         "temperature": round(random.uniform(18, 35), 2),
         "humidity": round(random.uniform(40, 95), 2),
         "pH": round(random.uniform(5.5, 7.8), 2),
@@ -19,28 +20,35 @@ def initial_readings():
     }
 
 
-def next_readings(previous):
+def next_readings(previous, nitrogen_decline=False):
+    """
+    Generate the next simulated reading.
+
+    nitrogen_decline=True reduces nitrogen by 10% per step for
+    testing MatiMitra's trend-alert mechanism.
+
+    These values are demonstrations, not real sensor measurements
+    or validated agricultural thresholds.
+    """
     result = {}
 
-    # Illustrative demo values, not calibrated real-world sensor readings.
     for nutrient in ("N", "P", "K"):
-        result[nutrient] = round(
-            max(
-                0,
-                min(
-                    140,
-                    float(previous[nutrient]) + random.uniform(-3, 3),
-                ),
-            ),
-            1,
-        )
+        previous_value = float(previous[nutrient])
+
+        if nutrient == "N" and nitrogen_decline:
+            new_value = previous_value * 0.90
+        else:
+            new_value = previous_value + random.uniform(-3, 3)
+
+        result[nutrient] = round(max(0, min(140, new_value)), 1)
 
     result["temperature"] = round(
         max(
             10,
             min(
                 45,
-                float(previous["temperature"]) + random.uniform(-1, 1),
+                float(previous.get("temperature", 25))
+                + random.uniform(-1, 1),
             ),
         ),
         2,
@@ -51,7 +59,8 @@ def next_readings(previous):
             10,
             min(
                 100,
-                float(previous["humidity"]) + random.uniform(-3, 3),
+                float(previous.get("humidity", 60))
+                + random.uniform(-3, 3),
             ),
         ),
         2,
@@ -73,7 +82,8 @@ def next_readings(previous):
             0,
             min(
                 300,
-                float(previous["rainfall"]) + random.uniform(-10, 10),
+                float(previous.get("rainfall", 100))
+                + random.uniform(-10, 10),
             ),
         ),
         2,
